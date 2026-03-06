@@ -1,8 +1,8 @@
 {
-  "topic": "XXX",
-  "topic2": "XXX",
-  "group.id": "XXX",
-  "bootstrap.servers" : "XXX:XX,XXX:XX,XXX:XX",
+  "topic": "demo",
+  "topic2": "test",
+  "group.id": "demo-group",
+  "bootstrap.servers" : "alikafka-serverless-cn-f0g4on6v902-1000-vpc.alikafka.aliyuncs.com:9092,alikafka-serverless-cn-f0g4on6v902-2000-vpc.alikafka.aliyuncs.com:9092,alikafka-serverless-cn-f0g4on6v902-3000-vpc.alikafka.aliyuncs.com:9092",
   "security.protocol" : "PLAINTEXT",
   "sasl.mechanism" : "PLAIN",
   "sasl.username" : "XXX",
