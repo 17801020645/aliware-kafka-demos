@@ -73,7 +73,7 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 				if ev.TopicPartition.Error != nil { // 如果分区上有错误，表示消息发送失败
 					log.Printf("Failed to write access log entry:%v", ev.TopicPartition.Error) // 打印发送失败的错误日志
 				} else { // 没有错误表示发送成功
-					log.Printf("Send OK topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value) // 打印成功发送的 topic、分区、offset 及消息内容
+					log.Printf("Send OK yyh-1 topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value) // 打印成功发送的 topic、分区、offset 及消息内容
 
 				}
 			}
@@ -82,9 +82,10 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 
 	// Produce messages to topic (asynchronously) // 异步地向 Kafka 主题写入消息
 	i := 0 // 消息计数器，从 0 开始
-	for { // 无限循环，持续发送消息
+	maxMessages := 20 // 最大消息数量：2 万条
+	for i < maxMessages { // 循环发送消息，达到 2 万条后停止
 		i = i + 1 // 递增计数器，用于区分每条消息
-		value := "this is a kafka message from confluent go " + strconv.Itoa(i) // 构造要发送的消息内容
+		value := "yyh-1 this is a kafka message from confluent go  " + strconv.Itoa(i) // 构造要发送的消息内容
 		var msg *kafka.Message = nil // 定义要发送的 Kafka 消息指针
 		if i%2 == 0 { // 偶数序号发送到第二个主题
 			msg = &kafka.Message{
@@ -99,8 +100,8 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 		}
 		producer.Produce(msg, nil) // 将消息异步投递到 Kafka 集群
 		time.Sleep(time.Duration(1) * time.Millisecond) // 每次发送后短暂休眠，避免过快发送
-		break
 	}
+	fmt.Printf("Successfully sent %d messages\n", i) // 打印发送完成的消息总数
 	// Wait for message deliveries before shutting down // 理论上等待所有消息发送完成再退出（死循环下不会执行到这里）
 	producer.Flush(15 * 1000) // 等待最长 15 秒以刷新缓冲区中的消息
 }
