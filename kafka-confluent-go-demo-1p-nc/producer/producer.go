@@ -82,10 +82,11 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 
 	// Produce messages to topic (asynchronously) // 异步地向 Kafka 主题写入消息
 	i := 0 // 消息计数器，从 0 开始
-	maxMessages := 20 // 最大消息数量：2 万条
+	maxMessages := 50 // 最大消息数量：2 万条
 	for i < maxMessages { // 循环发送消息，达到 2 万条后停止
 		i = i + 1 // 递增计数器，用于区分每条消息
 		value := "NEW-ONLY-TOPIC-DEMO this is a kafka message from confluent go  " + strconv.Itoa(i) // 构造要发送的消息内容
+		key := fmt.Sprintf("key-%d", i) // 为每条消息生成不同的 key，使消息分散到不同分区
 		var msg *kafka.Message = nil // 定义要发送的 Kafka 消息指针
 		// if i%2 == 0 { // 偶数序号发送到第二个主题
 		// 	msg = &kafka.Message{
@@ -96,6 +97,7 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 			msg = &kafka.Message{
 				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic, Partition: kafka.PartitionAny}, // 目标为 Topic，分区由 Kafka 自动分配
 				Value:          []byte(value),                                                         // 消息体为构造的字符串
+				Key:            []byte(key),                                                           // 设置消息 key，使消息根据 key 的 hash 分散到不同分区
 			}
 		// }
 		producer.Produce(msg, nil) // 将消息异步投递到 Kafka 集群

@@ -4,6 +4,7 @@ package main
 // Import 导入所需的依赖包
 import (
 	"fmt"  // 格式化输入输出包，用于打印日志和信息
+	"time" // 时间包，用于延迟显示信息
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"  // Confluent Kafka Go 客户端库，提供 Kafka 消费者功能
 	"kafkagodemo/config"  // 项目内部的配置包，用于加载 Kafka 配置文件
@@ -64,16 +65,37 @@ func doInitConsumer(cfg *config.KafkaConfig, consumerName string) *kafka.Consume
 // 参数 consumerName: 消费者名称标识
 // 参数 topic: 要订阅的主题名称
 func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
-	consumer.SubscribeTopics([]string{topic}, nil)  // 订阅单个主题，使用默认的 Rebalance 回调
+	// 定义 Rebalance 回调函数，用于显示分区分配情况
+	rebalanceCb := func(c *kafka.Consumer, event kafka.Event) error {
+		switch ev := event.(type) {
+		case kafka.AssignedPartitions:
+			fmt.Printf("[消费者：%s] Partitions assigned: %v\n", consumerName, ev.Partitions)
+			for _, p := range ev.Partitions {
+				fmt.Printf("[消费者：%s]   - Partition %d will be consumed\n", consumerName, p.Partition)
+			}
+			c.Assign(ev.Partitions)
+		case kafka.RevokedPartitions:
+			fmt.Printf("[消费者：%s] Partitions revoked: %v\n", consumerName, ev.Partitions)
+			c.Unassign()
+		}
+		return nil
+	}
+	
+	consumer.SubscribeTopics([]string{topic}, rebalanceCb)  // 订阅单个主题，使用自定义的 Rebalance 回调
 	
 	for {
 		msg, err := consumer.ReadMessage(-1)
 		if err == nil {
-			fmt.Printf("[消费者：%s] Message on %s: %s\n", consumerName, msg.TopicPartition, string(msg.Value))
+			fmt.Printf("[消费者：%s] ✅ Message on Topic[%s] Partition[%d] Offset[%d]: %s\n", 
+				consumerName, 
+				msg.TopicPartition.Topic, 
+				msg.TopicPartition.Partition, 
+				msg.TopicPartition.Offset, 
+				string(msg.Value))
 		} else {
 			// The client will
 			//automatically try to recover from all errors.
-			fmt.Printf("[消费者：%s] Consumer error: %v (%v)\n", consumerName, err, msg)
+			fmt.Printf("[消费者：%s] ❌ Consumer error: %v (%v)\n", consumerName, err, msg)
 		}
 	}
 }
@@ -87,13 +109,33 @@ func main() {
 	// 9094 for SASL_PLAINTEXT, need to provide sasl.username and sasl.password
 	cfg := config.MustLoad("")
 	
+	fmt.Println("========================================")
+	fmt.Printf("Starting Kafka Consumer Group: %s\n", cfg.GroupId)
+	fmt.Printf("Subscribing to topic: %s\n", cfg.Topic)
+	fmt.Println("========================================")
+	
 	// 启动两个消费者实例
 	consumer1 := doInitConsumer(cfg, "消费者 1")
 	consumer2 := doInitConsumer(cfg, "消费者 2")
+	consumer3 := doInitConsumer(cfg, "消费者 3")
 	
 	// 使用 goroutine 并发运行两个消费者，共同消费同一个 topic
 	go runConsumer(consumer1, "消费者 1", cfg.Topic)
 	go runConsumer(consumer2, "消费者 2", cfg.Topic)
+	go runConsumer(consumer3, "消费者 3", cfg.Topic)
+	
+	fmt.Println("Both consumers started, waiting for partition assignment...")
+	
+	// 等待 3 秒让 rebalance 完成，然后显示每个消费者的分区分配情况
+	time.Sleep(3 * time.Second)
+	assignment1, _ := consumer1.Assignment()
+	assignment2, _ := consumer2.Assignment()
+	assignment3, _ := consumer3.Assignment()
+	fmt.Printf("\n=== Final Partition Assignment After Rebalance ===\n")
+	fmt.Printf("[消费者：%s] Assigned partitions: %v (count: %d)\n", "消费者 1", assignment1, len(assignment1))
+	fmt.Printf("[消费者：%s] Assigned partitions: %v (count: %d)\n", "消费者 2", assignment2, len(assignment2))
+	fmt.Printf("[消费者：%s] Assigned partitions: %v (count: %d)\n", "消费者 3", assignment3, len(assignment3))
+	fmt.Printf("==================================================\n\n")
 	
 	// 阻塞主协程，防止程序退出
 	select {}
