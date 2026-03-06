@@ -12,6 +12,7 @@ type KafkaConfig struct {
 	Topic              string `json:"topic"`
 	Topic2             string `json:"topic2"`
 	GroupId            string `json:"group.id"`
+	GroupId2           string `json:"group.id2,omitempty"`  // 第二个消费者组的 ID（可选）
 	BootstrapServers   string `json:"bootstrap.servers"`
 	SecurityProtocol   string `json:"security.protocol"`
 	SslCaLocation      string `json:"ssl.ca.location,omitempty"`

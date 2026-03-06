@@ -1,6 +1,7 @@
 {
-  "topic": "demo1",
-  "group.id": "demo-1",
+  "topic": "demo-2g-2c",
+  "group.id": "g-demo-2g-2c",
+  "group.id2": "g-demo-2g-2c-2",
   "bootstrap.servers" : "alikafka-serverless-cn-f0g4on6v902-1000.alikafka.aliyuncs.com:9093,alikafka-serverless-cn-f0g4on6v902-2000.alikafka.aliyuncs.com:9093,alikafka-serverless-cn-f0g4on6v902-3000.alikafka.aliyuncs.com:9093",
   "security.protocol" : "SASL_SSL",
   "sasl.mechanism" : "PLAIN",

@@ -110,32 +110,56 @@ func main() {
 	cfg := config.MustLoad("")
 	
 	fmt.Println("========================================")
-	fmt.Printf("Starting Kafka Consumer Group: %s\n", cfg.GroupId)
+	fmt.Printf("Starting Kafka Consumer Groups\n")
 	fmt.Printf("Subscribing to topic: %s\n", cfg.Topic)
 	fmt.Println("========================================")
 	
-	// 启动两个消费者实例
-	consumer1 := doInitConsumer(cfg, "消费者 1")
-	consumer2 := doInitConsumer(cfg, "消费者 2")
-	consumer3 := doInitConsumer(cfg, "消费者 3")
+	// 启动第 1 个消费者组的 2 个消费者
+	fmt.Println("\n--- Starting Consumer Group 1 ---")
+	group1Consumer1 := doInitConsumer(cfg, "Group1-消费者 1")
+	group1Consumer2 := doInitConsumer(cfg, "Group1-消费者 2")
+	go runConsumer(group1Consumer1, "Group1-消费者 1", cfg.Topic)
+	go runConsumer(group1Consumer2, "Group1-消费者 2", cfg.Topic)
 	
-	// 使用 goroutine 并发运行两个消费者，共同消费同一个 topic
-	go runConsumer(consumer1, "消费者 1", cfg.Topic)
-	go runConsumer(consumer2, "消费者 2", cfg.Topic)
-	go runConsumer(consumer3, "消费者 3", cfg.Topic)
+	// 启动第 2 个消费者组的 2 个消费者（使用配置文件中的 group.id2）
+	var group2Consumer1, group2Consumer2 interface{}
+	if cfg.GroupId2 != "" {
+		fmt.Println("\n--- Starting Consumer Group 2 ---")
+		cfg2 := *cfg  // 复制配置
+		cfg2.GroupId = cfg.GroupId2  // 使用配置文件中的第二个 group.id
+		group2Consumer1 = doInitConsumer(&cfg2, "Group2-消费者 1")
+		group2Consumer2 = doInitConsumer(&cfg2, "Group2-消费者 2")
+		go runConsumer(group2Consumer1.(*kafka.Consumer), "Group2-消费者 1", cfg.Topic)
+		go runConsumer(group2Consumer2.(*kafka.Consumer), "Group2-消费者 2", cfg.Topic)
+		fmt.Printf("Configured Group2 ID: %s\n", cfg.GroupId2)
+	} else {
+		fmt.Println("\n--- No Group 2 configured (group.id2 not set in config) ---")
+	}
 	
-	fmt.Println("Both consumers started, waiting for partition assignment...")
+	fmt.Println("\nAll consumers started, waiting for partition assignment...")
 	
-	// 等待 3 秒让 rebalance 完成，然后显示每个消费者的分区分配情况
+	// 等待 5 秒让 rebalance 完成，然后显示每个消费者的分区分配情况
 	time.Sleep(3 * time.Second)
-	assignment1, _ := consumer1.Assignment()
-	assignment2, _ := consumer2.Assignment()
-	assignment3, _ := consumer3.Assignment()
+	
 	fmt.Printf("\n=== Final Partition Assignment After Rebalance ===\n")
-	fmt.Printf("[消费者：%s] Assigned partitions: %v (count: %d)\n", "消费者 1", assignment1, len(assignment1))
-	fmt.Printf("[消费者：%s] Assigned partitions: %v (count: %d)\n", "消费者 2", assignment2, len(assignment2))
-	fmt.Printf("[消费者：%s] Assigned partitions: %v (count: %d)\n", "消费者 3", assignment3, len(assignment3))
-	fmt.Printf("==================================================\n\n")
+	
+	// Group 1 的分区分配
+	assignment1_1, _ := group1Consumer1.Assignment()
+	assignment1_2, _ := group1Consumer2.Assignment()
+	fmt.Printf("\n【Consumer Group 1】 (group.id: %s)\n", cfg.GroupId)
+	fmt.Printf("  [Group1-消费者 1] Assigned partitions: %v (count: %d)\n", assignment1_1, len(assignment1_1))
+	fmt.Printf("  [Group1-消费者 2] Assigned partitions: %v (count: %d)\n", assignment1_2, len(assignment1_2))
+	
+	// Group 2 的分区分配（如果配置了）
+	if cfg.GroupId2 != "" {
+		assignment2_1, _ := group2Consumer1.(*kafka.Consumer).Assignment()
+		assignment2_2, _ := group2Consumer2.(*kafka.Consumer).Assignment()
+		fmt.Printf("\n【Consumer Group 2】 (group.id: %s)\n", cfg.GroupId2)
+		fmt.Printf("  [Group2-消费者 1] Assigned partitions: %v (count: %d)\n", assignment2_1, len(assignment2_1))
+		fmt.Printf("  [Group2-消费者 2] Assigned partitions: %v (count: %d)\n", assignment2_2, len(assignment2_2))
+	}
+	
+	fmt.Printf("\n==================================================\n\n")
 	
 	// 阻塞主协程，防止程序退出
 	select {}
