@@ -1,52 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-    "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"os"
-	"path/filepath"
+
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"kafkagodemo/config"
 )
-type KafkaConfig struct {
-	Topic      string `json:"topic"`
-	Topic2      string `json:"topic2"`
-	GroupId    string `json:"group.id"`
-	BootstrapServers    string `json:"bootstrap.servers"`
-	SecurityProtocol string `json:"security.protocol"`
-	SaslMechanism string `json:"sasl.mechanism"`
-	SaslUsername string `json:"sasl.username"`
-	SaslPassword string `json:"sasl.password"`
-}
 
-// config should be a pointer to structure, if not, panic
-func loadJsonConfig() *KafkaConfig {
-	workPath, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	configPath := filepath.Join(workPath, "conf")
-	fullPath := filepath.Join(configPath, "kafka.json")
-	file, err := os.Open(fullPath);
-	if (err != nil) {
-		msg := fmt.Sprintf("Can not load config at %s. Error: %v", fullPath, err)
-		panic(msg)
-	}
-
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	var config = &KafkaConfig{}
-	err = decoder.Decode(config);
-	if (err != nil) {
-		msg := fmt.Sprintf("Decode json fail for config file at %s. Error: %v", fullPath, err)
-		panic(msg)
-	}
-	json.Marshal(config)
-	return  config
-}
-
-
-func doInitConsumer(cfg *KafkaConfig) *kafka.Consumer {
+func doInitConsumer(cfg *config.KafkaConfig) *kafka.Consumer {
 	fmt.Print("init kafka consumer, it may take a few seconds to init the connection\n")
 	//common arguments
 	var kafkaconf = &kafka.ConfigMap{
@@ -64,8 +25,8 @@ func doInitConsumer(cfg *KafkaConfig) *kafka.Consumer {
 	case "PLAINTEXT" :
 		kafkaconf.SetKey("security.protocol", "plaintext");
 	case "SASL_SSL":
-		kafkaconf.SetKey("security.protocol", "sasl_ssl");
-		kafkaconf.SetKey("ssl.ca.location", "./conf/mix-4096-ca-cert");
+		kafkaconf.SetKey("security.protocol", "sasl_ssl")
+		kafkaconf.SetKey("ssl.ca.location", cfg.SslCaLocation)
 		kafkaconf.SetKey("sasl.username", cfg.SaslUsername);
 		kafkaconf.SetKey("sasl.password", cfg.SaslPassword);
 		kafkaconf.SetKey("sasl.mechanism", cfg.SaslMechanism);
@@ -96,7 +57,7 @@ func main() {
 	// 9092 for PLAINTEXT
 	// 9093 for SASL_SSL, need to provide sasl.username and sasl.password
 	// 9094 for SASL_PLAINTEXT, need to provide sasl.username and sasl.password
-	cfg := loadJsonConfig();
+	cfg := config.MustLoad("")
 	consumer := doInitConsumer(cfg)
 
 	consumer.SubscribeTopics([]string{cfg.Topic, cfg.Topic2}, nil)

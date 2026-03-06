@@ -1,60 +1,20 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"log"
-	"os"
-	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"kafkagodemo/config"
 )
 
 const (
 	INT32_MAX = 2147483647 - 1000
 )
 
-type KafkaConfig struct {
-	Topic      string `json:"topic"`
-	Topic2      string `json:"topic2"`
-	GroupId    string `json:"group.id"`
-	BootstrapServers    string `json:"bootstrap.servers"`
-	SecurityProtocol string `json:"security.protocol"`
-	SslCaLocation string `json:"ssl.ca.location"`
-	SaslMechanism string `json:"sasl.mechanism"`
-	SaslUsername string `json:"sasl.username"`
-	SaslPassword string `json:"sasl.password"`
-}
-
-// config should be a pointer to structure, if not, panic
-func loadJsonConfig() *KafkaConfig {
-	workPath, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	configPath := filepath.Join(workPath, "conf")
-	fullPath := filepath.Join(configPath, "kafka.json")
-	file, err := os.Open(fullPath);
-	if (err != nil) {
-		msg := fmt.Sprintf("Can not load config at %s. Error: %v", fullPath, err)
-		panic(msg)
-	}
-
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	var config = &KafkaConfig{}
-	err = decoder.Decode(config);
-	if (err != nil) {
-		msg := fmt.Sprintf("Decode json fail for config file at %s. Error: %v", fullPath, err)
-		panic(msg)
-	}
-	json.Marshal(config)
-	return  config
-}
-
-func doInitProducer(cfg *KafkaConfig) *kafka.Producer {
+func doInitProducer(cfg *config.KafkaConfig) *kafka.Producer {
 	fmt.Print("init kafka producer, it may take a few seconds to init the connection\n")
 	//common arguments
 	var kafkaconf = &kafka.ConfigMap{
@@ -71,14 +31,13 @@ func doInitProducer(cfg *KafkaConfig) *kafka.Producer {
 	case "PLAINTEXT" :
 		kafkaconf.SetKey("security.protocol", "plaintext");
 	case "SASL_SSL":
-		kafkaconf.SetKey("security.protocol", "sasl_ssl");
-		kafkaconf.SetKey("ssl.ca.location", "conf/mix-4096-ca-cert");
-		kafkaconf.SetKey("sasl.username", cfg.SaslUsername);
-		kafkaconf.SetKey("sasl.password", cfg.SaslPassword);
-		kafkaconf.SetKey("sasl.mechanism", cfg.SaslMechanism);
-		// hostname校验改成空,
-       	kafkaconf.SetKey("enable.ssl.certificate.verification", "false");
-       	kafkaconf.SetKey("ssl.endpoint.identification.algorithm", "None")
+		kafkaconf.SetKey("security.protocol", "sasl_ssl")
+		kafkaconf.SetKey("ssl.ca.location", cfg.SslCaLocation)
+		kafkaconf.SetKey("sasl.username", cfg.SaslUsername)
+		kafkaconf.SetKey("sasl.password", cfg.SaslPassword)
+		kafkaconf.SetKey("sasl.mechanism", cfg.SaslMechanism)
+		kafkaconf.SetKey("enable.ssl.certificate.verification", "false")
+		kafkaconf.SetKey("ssl.endpoint.identification.algorithm", "None")
 	case "SASL_PLAINTEXT":
 		kafkaconf.SetKey("security.protocol", "sasl_plaintext");
 		kafkaconf.SetKey("sasl.username", cfg.SaslUsername);
@@ -96,51 +55,52 @@ func doInitProducer(cfg *KafkaConfig) *kafka.Producer {
 	return producer
 }
 
-func main() {
-	// Choose the correct protocol
-	// 9092 for PLAINTEXT
-	// 9093 for SASL_SSL, need to provide sasl.username and sasl.password
-	// 9094 for SASL_PLAINTEXT, need to provide sasl.username and sasl.password
-	cfg := loadJsonConfig();
-	producer := doInitProducer(cfg)
+func main() { // 程序入口函数，启动 Kafka 生产者示例
+	// Choose the correct protocol                        // 说明不同端口对应的安全协议
+	// 9092 for PLAINTEXT                                 // 明文传输使用的端口
+	// 9093 for SASL_SSL, need to provide sasl.username and sasl.password // 启用 SASL_SSL 时使用的端口及鉴权说明
+	// 9094 for SASL_PLAINTEXT, need to provide sasl.username and sasl.password // 启用 SASL_PLAINTEXT 时使用的端口及鉴权说明
+	cfg := config.MustLoad("") // 从默认路径加载 Kafka 配置（conf/kafka.json）
+	producer := doInitProducer(cfg) // 基于配置初始化 Kafka Producer 客户端
 
-    defer producer.Close()
+	defer producer.Close() // 在 main 结束前关闭 Producer，确保资源被释放
 
-	// Delivery report handler for produced messages
-	go func() {
-		for e := range producer.Events() {
-			switch ev := e.(type) {
-			case *kafka.Message:
-				if ev.TopicPartition.Error != nil {
-					log.Printf("Failed to write access log entry:%v", ev.TopicPartition.Error)
-				} else {
-					log.Printf("Send OK topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic,  ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value)
+	// Delivery report handler for produced messages // 处理消息投递结果的回调处理逻辑
+	go func() { // 启动一个 goroutine 异步消费 Producer 事件
+		for e := range producer.Events() { // 不断从事件通道中读取事件
+			switch ev := e.(type) { // 根据事件类型做类型断言
+			case *kafka.Message: // 只关心消息投递结果事件
+				if ev.TopicPartition.Error != nil { // 如果分区上有错误，表示消息发送失败
+					log.Printf("Failed to write access log entry:%v", ev.TopicPartition.Error) // 打印发送失败的错误日志
+				} else { // 没有错误表示发送成功
+					log.Printf("Send OK topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value) // 打印成功发送的 topic、分区、offset 及消息内容
 
 				}
 			}
 		}
-	}()
+	}() // 立即启动 goroutine 执行上述匿名函数
 
-    // Produce messages to topic (asynchronously)
-	i := 0
-	for {
-		i = i + 1
-		value := "this is a kafka message from confluent go " + strconv.Itoa(i)
-		var msg *kafka.Message = nil
-		if i % 2 == 0 {
+	// Produce messages to topic (asynchronously) // 异步地向 Kafka 主题写入消息
+	i := 0 // 消息计数器，从 0 开始
+	for { // 无限循环，持续发送消息
+		i = i + 1 // 递增计数器，用于区分每条消息
+		value := "this is a kafka message from confluent go " + strconv.Itoa(i) // 构造要发送的消息内容
+		var msg *kafka.Message = nil // 定义要发送的 Kafka 消息指针
+		if i%2 == 0 { // 偶数序号发送到第二个主题
 			msg = &kafka.Message{
-				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic2, Partition: kafka.PartitionAny},
-				Value:          []byte(value),
+				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic2, Partition: kafka.PartitionAny}, // 目标为 Topic2，分区由 Kafka 自动分配
+				Value:          []byte(value),                                                          // 消息体为构造的字符串
 			}
-		} else {
+		} else { // 奇数序号发送到第一个主题
 			msg = &kafka.Message{
-				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic, Partition: kafka.PartitionAny},
-				Value:          []byte(value),
+				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic, Partition: kafka.PartitionAny}, // 目标为 Topic，分区由 Kafka 自动分配
+				Value:          []byte(value),                                                         // 消息体为构造的字符串
 			}
 		}
-		producer.Produce(msg, nil)
-		time.Sleep(time.Duration(1) * time.Millisecond)
+		producer.Produce(msg, nil) // 将消息异步投递到 Kafka 集群
+		time.Sleep(time.Duration(1) * time.Millisecond) // 每次发送后短暂休眠，避免过快发送
+		break
 	}
-	// Wait for message deliveries before shutting down
-	producer.Flush(15 * 1000)
+	// Wait for message deliveries before shutting down // 理论上等待所有消息发送完成再退出（死循环下不会执行到这里）
+	producer.Flush(15 * 1000) // 等待最长 15 秒以刷新缓冲区中的消息
 }
