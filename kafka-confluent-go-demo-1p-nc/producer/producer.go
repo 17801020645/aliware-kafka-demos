@@ -21,7 +21,7 @@ func doInitProducer(cfg *config.KafkaConfig) *kafka.Producer {
 		"api.version.request": "true",
 		"message.max.bytes": 1000000,
 		"linger.ms": 500,
-		"sticky.partitioning.linger.ms" : 1000,
+		// "sticky.partitioning.linger.ms" : 1000,
 		"retries": INT32_MAX,
 		"retry.backoff.ms": 1000,
 		"acks": "1"}
@@ -73,7 +73,7 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 				if ev.TopicPartition.Error != nil { // 如果分区上有错误，表示消息发送失败
 					log.Printf("Failed to write access log entry:%v", ev.TopicPartition.Error) // 打印发送失败的错误日志
 				} else { // 没有错误表示发送成功
-					log.Printf("Send OK yyh-1 topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value) // 打印成功发送的 topic、分区、offset 及消息内容
+					log.Printf("Send OK yyh-2 topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value) // 打印成功发送的 topic、分区、offset 及消息内容
 
 				}
 			}
@@ -85,19 +85,19 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 	maxMessages := 20 // 最大消息数量：2 万条
 	for i < maxMessages { // 循环发送消息，达到 2 万条后停止
 		i = i + 1 // 递增计数器，用于区分每条消息
-		value := "yyh-1 this is a kafka message from confluent go  " + strconv.Itoa(i) // 构造要发送的消息内容
+		value := "NEW-ONLY-TOPIC-DEMO this is a kafka message from confluent go  " + strconv.Itoa(i) // 构造要发送的消息内容
 		var msg *kafka.Message = nil // 定义要发送的 Kafka 消息指针
-		if i%2 == 0 { // 偶数序号发送到第二个主题
-			msg = &kafka.Message{
-				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic2, Partition: kafka.PartitionAny}, // 目标为 Topic2，分区由 Kafka 自动分配
-				Value:          []byte(value),                                                          // 消息体为构造的字符串
-			}
-		} else { // 奇数序号发送到第一个主题
+		// if i%2 == 0 { // 偶数序号发送到第二个主题
+		// 	msg = &kafka.Message{
+		// 		TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic2, Partition: kafka.PartitionAny}, // 目标为 Topic2，分区由 Kafka 自动分配
+		// 		Value:          []byte(value),                                                          // 消息体为构造的字符串
+		// 	}
+		// } else { // 奇数序号发送到第一个主题
 			msg = &kafka.Message{
 				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic, Partition: kafka.PartitionAny}, // 目标为 Topic，分区由 Kafka 自动分配
 				Value:          []byte(value),                                                         // 消息体为构造的字符串
 			}
-		}
+		// }
 		producer.Produce(msg, nil) // 将消息异步投递到 Kafka 集群
 		time.Sleep(time.Duration(1) * time.Millisecond) // 每次发送后短暂休眠，避免过快发送
 	}

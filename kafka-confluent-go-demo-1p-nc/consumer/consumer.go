@@ -11,9 +11,10 @@ import (
 
 // doInitConsumer 初始化 Kafka 消费者客户端
 // 参数 cfg: KafkaConfig 结构体指针，包含 Kafka 连接和认证配置
+// 参数 consumerName: 消费者名称标识
 // 返回：*kafka.Consumer 初始化成功的 Kafka 消费者实例
-func doInitConsumer(cfg *config.KafkaConfig) *kafka.Consumer {
-	fmt.Print("init kafka consumer, it may take a few seconds to init the connection\n")  // 打印初始化开始信息，提示用户连接初始化可能需要几秒
+func doInitConsumer(cfg *config.KafkaConfig, consumerName string) *kafka.Consumer {
+	fmt.Printf("init kafka consumer [%s], it may take a few seconds to init the connection\n", consumerName)  // 打印初始化开始信息，提示用户连接初始化可能需要几秒
 	
 	// common arguments  // 注释：以下是 Kafka 消费者的通用配置参数
 	var kafkaconf = &kafka.ConfigMap{  // 创建 Kafka 配置映射对象，用于存储所有配置键值对
@@ -54,32 +55,46 @@ func doInitConsumer(cfg *config.KafkaConfig) *kafka.Consumer {
 	if err != nil {  // 如果创建消费者时发生错误
 		panic(err)  // 抛出致命错误并终止程序
 	}
-	fmt.Print("init kafka consumer success\n")  // 打印初始化成功信息
+	fmt.Printf("init kafka consumer [%s] success\n", consumerName)  // 打印初始化成功信息
 	return consumer;  // 返回初始化好的消费者实例
+}
+
+// runConsumer 运行单个消费者协程
+// 参数 consumer: Kafka 消费者实例
+// 参数 consumerName: 消费者名称标识
+// 参数 topic: 要订阅的主题名称
+func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
+	consumer.SubscribeTopics([]string{topic}, nil)  // 订阅单个主题，使用默认的 Rebalance 回调
+	
+	for {
+		msg, err := consumer.ReadMessage(-1)
+		if err == nil {
+			fmt.Printf("[消费者：%s] Message on %s: %s\n", consumerName, msg.TopicPartition, string(msg.Value))
+		} else {
+			// The client will
+			//automatically try to recover from all errors.
+			fmt.Printf("[消费者：%s] Consumer error: %v (%v)\n", consumerName, err, msg)
+		}
+	}
 }
 
 // main 程序主入口函数，启动 Kafka 消费者示例
 func main() {
 
-	// Choose the correct protocol  // 注释：选择正确的安全协议
-	// 9092 for PLAINTEXT  // 注释：9092 端口用于明文传输协议
-	// 9093 for SASL_SSL, need to provide sasl.username and sasl.password  // 注释：9093 端口用于 SASL_SSL 协议，需要提供用户名和密码
-	// 9094 for SASL_PLAINTEXT, need to provide sasl.username and sasl.password  // 注释：9094 端口用于 SASL_PLAINTEXT 协议，需要提供用户名和密码
-	cfg := config.MustLoad("")  // 从默认路径（conf/kafka.json）加载 Kafka 配置，加载失败会直接 panic
-	consumer := doInitConsumer(cfg)  // 基于配置初始化 Kafka 消费者客户端
-
-	consumer.SubscribeTopics([]string{cfg.Topic, cfg.Topic2}, nil)  // 订阅多个主题（topic 和 topic2），第二个参数 nil 表示使用默认的 Rebalance 回调
-
-	for {  // 无限循环，持续从 Kafka 消费消息
-		msg, err := consumer.ReadMessage(-1)  // 阻塞式读取消息，-1 表示无限期等待直到有消息到达
-		if err == nil {  // 如果没有错误（成功读取到消息）
-			fmt.Printf("Message on %s: %s\n", msg.TopicPartition, string(msg.Value))  // 打印消息所在的分区信息和消息内容
-		} else {  // 如果读取消息时发生错误
-			// The client will  // 注释：Kafka 客户端会自动尝试从所有错误中恢复
-			//automatically try to recover from all errors.  // 注释：无需手动处理，客户端内部会重试
-			fmt.Printf("Consumer error: %v (%v)\n", err, msg)  // 打印消费者错误信息和相关消息
-		}
-	}
-
-	consumer.Close()  // 注意：这行代码不会被执行到，因为上面是无限循环，实际使用时需要在合适的地方 break 退出循环
+	// Choose the correct protocol
+	// 9092 for PLAINTEXT
+	// 9093 for SASL_SSL, need to provide sasl.username and sasl.password
+	// 9094 for SASL_PLAINTEXT, need to provide sasl.username and sasl.password
+	cfg := config.MustLoad("")
+	
+	// 启动两个消费者实例
+	consumer1 := doInitConsumer(cfg, "消费者 1")
+	consumer2 := doInitConsumer(cfg, "消费者 2")
+	
+	// 使用 goroutine 并发运行两个消费者，共同消费同一个 topic
+	go runConsumer(consumer1, "消费者 1", cfg.Topic)
+	go runConsumer(consumer2, "消费者 2", cfg.Topic)
+	
+	// 阻塞主协程，防止程序退出
+	select {}
 }
