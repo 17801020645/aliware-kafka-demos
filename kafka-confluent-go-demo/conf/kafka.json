@@ -1,7 +1,7 @@
 {
-  "topic": "demo",
+  "topic": "demo-kuorong",
   "topic2": "test",
-  "group.id": "demo-group",
+  "group.id": "g-demo-kuorong",
   "bootstrap.servers" : "alikafka-serverless-cn-f0g4on6v902-1000.alikafka.aliyuncs.com:9093,alikafka-serverless-cn-f0g4on6v902-2000.alikafka.aliyuncs.com:9093,alikafka-serverless-cn-f0g4on6v902-3000.alikafka.aliyuncs.com:9093",
   "security.protocol" : "SASL_SSL",
   "sasl.mechanism" : "PLAIN",
