@@ -1,9 +1,18 @@
+// 顺序性 Producer 示例
+//
+// 本示例演示 Kafka 消息顺序性保证：通过 Key 精准路由 + 幂等性 + 限制在途请求，
+// 确保有顺序关系的消息正确落入同一分区，且重试不会打乱顺序。
+//
+// 配置说明（均在 producer 代码内，未修改 conf/kafka.json）：
+// - acks=all：幂等性要求；若集群 min.insync.replicas 不满足，可能影响写入
+// - enable.idempotence=true、max.in.flight.requests.per.connection=1
+//
+// 如需修改连接配置（bootstrap.servers、SASL 等），请确认 conf/kafka.json 后再运行。
 package main
 
 import (
 	"fmt"
 	"log"
-	"strconv"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -12,19 +21,40 @@ import (
 
 const (
 	INT32_MAX = 2147483647 - 1000
+
+	// 模拟的「订单」数量，用于演示局部顺序：相同 orderKey 的消息会落入同一分区
+	numOrders = 3
 )
 
+// produceMeta 用于在 delivery callback 中关联发送时间，观测 max.in.flight 行为
+type produceMeta struct {
+	produceTime time.Time
+	index       int
+}
+
+// doInitProducer 初始化支持消息顺序性的 Kafka 生产者
+//
+// 顺序性保证机制：
+// 1. 精准路由：通过为消息指定 Key（如 orderID），Kafka 按 Key 哈希到固定分区，相同 Key 的消息保证局部顺序
+// 2. 幂等性（enable.idempotence=true）：防止重试导致的消息重复与乱序，结合序列号保证写入顺序与发送顺序一致
+// 3. 限制在途请求（max.in.flight.requests.per.connection=1）：在收到前一条 ACK 前不发送下一条，彻底避免重试乱序
+// 4. acks=all：幂等性要求，确保 leader 与所有 in-sync 副本确认后才返回
 func doInitProducer(cfg *config.KafkaConfig) *kafka.Producer {
 	fmt.Print("init kafka producer, it may take a few seconds to init the connection\n")
-	//common arguments
 	var kafkaconf = &kafka.ConfigMap{
 		"api.version.request": "true",
-		"message.max.bytes": 1000000,
-		"linger.ms": 500,
-		// "sticky.partitioning.linger.ms" : 1000,
-		"retries": INT32_MAX,
-		"retry.backoff.ms": 1000,
-		"acks": "1"}
+		"message.max.bytes":   1000000,
+		"retries":             INT32_MAX,
+		"retry.backoff.ms":    1000,
+		// "debug": "broker,topic,msg",
+		// 禁用/减少批处理，让每条消息单独发送，便于观测 max.in.flight=1 效果
+		"linger.ms":           0,   // 消息到达后立即发送，不等待合并
+		"batch.num.messages": 1,    // 每条消息单独成批发送（librdkafka）
+		// 顺序性相关配置
+		"acks":                              "all", // 幂等性要求，必须为 all
+		"enable.idempotence":                true,  // 开启幂等性，防止重试乱序与重复
+		"max.in.flight.requests.per.connection": 1, // 未开启幂等时需为 1；开启后可为 1~5，1 最严格保证顺序
+	}
 	kafkaconf.SetKey("bootstrap.servers", cfg.BootstrapServers)
 
 	switch cfg.SecurityProtocol {
@@ -65,45 +95,49 @@ func main() { // 程序入口函数，启动 Kafka 生产者示例
 
 	defer producer.Close() // 在 main 结束前关闭 Producer，确保资源被释放
 
-	// Delivery report handler for produced messages // 处理消息投递结果的回调处理逻辑
-	go func() { // 启动一个 goroutine 异步消费 Producer 事件
-		for e := range producer.Events() { // 不断从事件通道中读取事件
-			switch ev := e.(type) { // 根据事件类型做类型断言
-			case *kafka.Message: // 只关心消息投递结果事件
-				if ev.TopicPartition.Error != nil { // 如果分区上有错误，表示消息发送失败
-					log.Printf("Failed to write access log entry:%v", ev.TopicPartition.Error) // 打印发送失败的错误日志
-				} else { // 没有错误表示发送成功
-					log.Printf("Send OK yyh-2 topic:%v partition:%v offset:%v content:%s\n", *ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value) // 打印成功发送的 topic、分区、offset 及消息内容
-
+	// Delivery report handler：记录 Produce 与 ACK 时间，用于观测 max.in.flight 行为
+	go func() {
+		for e := range producer.Events() {
+			switch ev := e.(type) {
+			case *kafka.Message:
+				if ev.TopicPartition.Error != nil {
+					log.Printf("Failed to write: %v", ev.TopicPartition.Error)
+				} else {
+					ackTime := time.Now()
+					if meta, ok := ev.Opaque.(*produceMeta); ok {
+						log.Printf("ACK #%d at %v (latency %v) topic:%v partition:%v offset:%v content:%s",
+							meta.index, ackTime.Format("15:04:05.000"), ackTime.Sub(meta.produceTime),
+							*ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value)
+					} else {
+						log.Printf("Send OK topic:%v partition:%v offset:%v content:%s",
+							*ev.TopicPartition.Topic, ev.TopicPartition.Partition, ev.TopicPartition.Offset, ev.Value)
+					}
 				}
 			}
 		}
-	}() // 立即启动 goroutine 执行上述匿名函数
+	}()
 
-	// Produce messages to topic (asynchronously) // 异步地向 Kafka 主题写入消息
-	i := 0 // 消息计数器，从 0 开始
-	maxMessages := 10 // 最大消息数量：2 万条
-	for i < maxMessages { // 循环发送消息，达到 2 万条后停止
-		i = i + 1 // 递增计数器，用于区分每条消息
-		value := "NEW-ONLY-TOPIC-DEMO this is a kafka message from confluent go  " + strconv.Itoa(i) // 构造要发送的消息内容
-		key := fmt.Sprintf("key-%d", i) // 为每条消息生成不同的 key，使消息分散到不同分区
-		var msg *kafka.Message = nil // 定义要发送的 Kafka 消息指针
-		// if i%2 == 0 { // 偶数序号发送到第二个主题
-		// 	msg = &kafka.Message{
-		// 		TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic2, Partition: kafka.PartitionAny}, // 目标为 Topic2，分区由 Kafka 自动分配
-		// 		Value:          []byte(value),                                                          // 消息体为构造的字符串
-		// 	}
-		// } else { // 奇数序号发送到第一个主题
-			msg = &kafka.Message{
-				TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic, Partition: kafka.PartitionAny}, // 目标为 Topic，分区由 Kafka 自动分配
-				Value:          []byte(value),                                                         // 消息体为构造的字符串
-				Key:            []byte(key),                                                           // 设置消息 key，使消息根据 key 的 hash 分散到不同分区
-			}
-		// }
-		producer.Produce(msg, nil) // 将消息异步投递到 Kafka 集群
-		time.Sleep(time.Duration(1) * time.Millisecond) // 每次发送后短暂休眠，避免过快发送
+	// 顺序性演示：按「订单」分组发送，相同 orderKey 的消息会路由到同一分区，保证局部顺序
+	// 每个订单发送多条消息（如：创建、支付、发货），这些消息在分区内按发送顺序存储
+	maxMessages := 10
+	for i := 0; i < maxMessages; i++ {
+		orderID := i % numOrders
+		seqInOrder := i/numOrders + 1
+		orderKey := fmt.Sprintf("order-%d", orderID)
+		value := fmt.Sprintf("order-%d seq-%d: kafka ordered message %d", orderID, seqInOrder, i+1)
+
+		produceTime := time.Now()
+		msg := &kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &cfg.Topic, Partition: kafka.PartitionAny},
+			Key:            []byte(orderKey),
+			Value:          []byte(value),
+			Opaque:         &produceMeta{produceTime: produceTime, index: i},
+		}
+		log.Printf("Produce #%d at %v", i, produceTime.Format("15:04:05.000"))
+		producer.Produce(msg, nil)
+		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
-	fmt.Printf("Successfully sent %d messages\n", i) // 打印发送完成的消息总数
+	fmt.Printf("Successfully sent %d messages (ordered by key: order-0..order-%d)\n", maxMessages, numOrders-1)
 	// Wait for message deliveries before shutting down // 理论上等待所有消息发送完成再退出（死循环下不会执行到这里）
 	producer.Flush(15 * 1000) // 等待最长 15 秒以刷新缓冲区中的消息
 }

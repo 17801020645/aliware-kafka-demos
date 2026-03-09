@@ -1,13 +1,22 @@
-// Package main 定义主包，作为程序的入口点
+// 顺序性 Consumer 示例
+//
+// 保证消费顺序的要点：
+// 1. 分区独占：同一消费者组内，一个分区只由一个消费者消费（Rebalance 自动保证）
+//    建议：消费者数量 <= Topic 分区数，否则部分消费者会空闲
+// 2. 单线程处理：每个消费者串行处理其分配到的分区，避免并发乱序
+// 3. 处理完再提交：enable.auto.commit=false，仅在 processMessage 成功后才 CommitMessage
+//    若先提交再处理，处理失败时会导致消息被跳过、顺序断裂
+//
+// 配置变更提醒：enable.auto.commit 在代码内设置，未修改 conf/kafka.json
 package main
 
-// Import 导入所需的依赖包
 import (
-	"fmt"  // 格式化输入输出包，用于打印日志和信息
-	"time" // 时间包，用于延迟显示信息
+	"fmt"
+	"log"
+	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"  // Confluent Kafka Go 客户端库，提供 Kafka 消费者功能
-	"kafkagodemo/config"  // 项目内部的配置包，用于加载 Kafka 配置文件
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"kafkagodemo/config"
 )
 
 // doInitConsumer 初始化 Kafka 消费者客户端
@@ -17,15 +26,17 @@ import (
 func doInitConsumer(cfg *config.KafkaConfig, consumerName string) *kafka.Consumer {
 	fmt.Printf("init kafka consumer [%s], it may take a few seconds to init the connection\n", consumerName)  // 打印初始化开始信息，提示用户连接初始化可能需要几秒
 	
-	// common arguments  // 注释：以下是 Kafka 消费者的通用配置参数
-	var kafkaconf = &kafka.ConfigMap{  // 创建 Kafka 配置映射对象，用于存储所有配置键值对
-		"api.version.request": "true",  // 请求 broker 支持的 API 版本，以便自动调整功能
-		"auto.offset.reset": "earliest",  // 当消费者组没有之前的 offset 时，从最早的可用消息开始消费（earliest=最早，latest=最新）
-		"heartbeat.interval.ms": 3000,  // 心跳间隔（毫秒），消费者向 broker 发送心跳的频率，用于检测消费者是否存活
-		"session.timeout.ms": 30000,  // 会话超时时间（毫秒），broker 等待消费者心跳的最长时间，超时后认为消费者已下线
-		"max.poll.interval.ms": 120000,  // 两次 poll 之间的最大间隔（毫秒），超过此时间未调用 ReadMessage 则认为消费者失败
-		"fetch.max.bytes": 1024000,  // 每次从 broker 获取的最大字节数，控制单次网络请求的数据量
-		"max.partition.fetch.bytes": 256000}  // 每个分区每次获取的最大字节数，限制单个分区的拉取数据量
+	var kafkaconf = &kafka.ConfigMap{
+		"api.version.request":       "true",
+		"auto.offset.reset":         "earliest",
+		"heartbeat.interval.ms":     3000,
+		"session.timeout.ms":        30000,
+		"max.poll.interval.ms":      120000,
+		"fetch.max.bytes":           1024000,
+		"max.partition.fetch.bytes": 256000,
+		// 顺序性：关闭自动提交，处理完成后再手动提交，避免处理失败时跳过消息
+		"enable.auto.commit": false,
+	}
 	kafkaconf.SetKey("bootstrap.servers", cfg.BootstrapServers);  // 设置 Kafka 集群的连接地址列表，从配置文件中读取
 	kafkaconf.SetKey("group.id", cfg.GroupId)  // 设置消费者组 ID，同一组内的消费者共同消费分区
 
@@ -60,12 +71,22 @@ func doInitConsumer(cfg *config.KafkaConfig, consumerName string) *kafka.Consume
 	return consumer;  // 返回初始化好的消费者实例
 }
 
+// processMessage 模拟业务处理，返回是否成功。
+// 实际业务中可替换为数据库写入、RPC 调用等；失败时不提交 offset，消息会被重新消费。
+func processMessage(consumerName string, msg *kafka.Message) bool {
+	// 模拟业务逻辑：打印即视为处理
+	topic := ""
+	if msg.TopicPartition.Topic != nil {
+		topic = *msg.TopicPartition.Topic
+	}
+	fmt.Printf("[消费者：%s] ✅ Message on Topic[%s] Partition[%d] Offset[%d]: %s\n",
+		consumerName, topic, msg.TopicPartition.Partition, msg.TopicPartition.Offset, string(msg.Value))
+	return true
+}
+
 // runConsumer 运行单个消费者协程
-// 参数 consumer: Kafka 消费者实例
-// 参数 consumerName: 消费者名称标识
-// 参数 topic: 要订阅的主题名称
+// 单线程串行处理，保证分区内消息顺序；处理完成后再提交 offset。
 func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
-	// 定义 Rebalance 回调函数，用于显示分区分配情况
 	rebalanceCb := func(c *kafka.Consumer, event kafka.Event) error {
 		switch ev := event.(type) {
 		case kafka.AssignedPartitions:
@@ -80,22 +101,30 @@ func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
 		}
 		return nil
 	}
-	
-	consumer.SubscribeTopics([]string{topic}, rebalanceCb)  // 订阅单个主题，使用自定义的 Rebalance 回调
-	
+
+	consumer.SubscribeTopics([]string{topic}, rebalanceCb)
+
 	for {
 		msg, err := consumer.ReadMessage(-1)
-		if err == nil {
-			fmt.Printf("[消费者：%s] ✅ Message on Topic[%s] Partition[%d] Offset[%d]: %s\n", 
-				consumerName, 
-				msg.TopicPartition.Topic, 
-				msg.TopicPartition.Partition, 
-				msg.TopicPartition.Offset, 
-				string(msg.Value))
+		if err != nil {
+			if msg != nil && msg.TopicPartition.Topic != nil {
+				fmt.Printf("[消费者：%s] ❌ Consumer error: %v (topic=%s partition=%d)\n",
+					consumerName, err, *msg.TopicPartition.Topic, msg.TopicPartition.Partition)
+			} else {
+				fmt.Printf("[消费者：%s] ❌ Consumer error: %v\n", consumerName, err)
+			}
+			continue
+		}
+
+		// 【处理完再提交】先执行业务逻辑，成功后才 CommitMessage；失败则不提交，消息会被重新消费
+		if processMessage(consumerName, msg) {
+			_, commitErr := consumer.CommitMessage(msg)
+			if commitErr != nil {
+				log.Printf("[消费者：%s] ⚠️ Commit failed (offset %d): %v，下次将重复消费", consumerName, msg.TopicPartition.Offset, commitErr)
+			}
 		} else {
-			// The client will
-			//automatically try to recover from all errors.
-			fmt.Printf("[消费者：%s] ❌ Consumer error: %v (%v)\n", consumerName, err, msg)
+			// 处理失败，不提交 offset；重启或下次 poll 时会从上次未提交位置重新拉取
+			log.Printf("[消费者：%s] ⚠️ Process failed, skip commit for offset %d", consumerName, msg.TopicPartition.Offset)
 		}
 	}
 }
