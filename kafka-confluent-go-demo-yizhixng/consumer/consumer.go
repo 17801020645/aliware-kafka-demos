@@ -73,14 +73,20 @@ func doInitConsumer(cfg *config.KafkaConfig, consumerName string) *kafka.Consume
 
 // processMessage 模拟业务处理，返回是否成功。
 // 实际业务中可替换为数据库写入、RPC 调用等；失败时不提交 offset，消息会被重新消费。
+// 日志格式参考 producer，便于对照观察顺序性（partition+offset 递增）与一致性（同 key 顺序消费）。
 func processMessage(consumerName string, msg *kafka.Message) bool {
-	// 模拟业务逻辑：打印即视为处理
 	topic := ""
 	if msg.TopicPartition.Topic != nil {
 		topic = *msg.TopicPartition.Topic
 	}
-	fmt.Printf("[消费者：%s] ✅ Message on Topic[%s] Partition[%d] Offset[%d]: %s\n",
-		consumerName, topic, msg.TopicPartition.Partition, msg.TopicPartition.Offset, string(msg.Value))
+	keyStr := ""
+	if msg.Key != nil {
+		keyStr = string(msg.Key)
+	}
+	recvTime := time.Now()
+	log.Printf("[%s] Consume at %v topic:%v partition:%v offset:%v key:%s content:%s",
+		consumerName, recvTime.Format("15:04:05.000"), topic, msg.TopicPartition.Partition,
+		msg.TopicPartition.Offset, keyStr, msg.Value)
 	return true
 }
 
@@ -90,13 +96,13 @@ func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
 	rebalanceCb := func(c *kafka.Consumer, event kafka.Event) error {
 		switch ev := event.(type) {
 		case kafka.AssignedPartitions:
-			fmt.Printf("[消费者：%s] Partitions assigned: %v\n", consumerName, ev.Partitions)
+			log.Printf("[%s] Partitions assigned: %v (顺序性：分区内 offset 递增)", consumerName, ev.Partitions)
 			for _, p := range ev.Partitions {
-				fmt.Printf("[消费者：%s]   - Partition %d will be consumed\n", consumerName, p.Partition)
+				log.Printf("[%s]   - Partition %d will be consumed (同 key 消息落同分区，保证局部顺序)", consumerName, p.Partition)
 			}
 			c.Assign(ev.Partitions)
 		case kafka.RevokedPartitions:
-			fmt.Printf("[消费者：%s] Partitions revoked: %v\n", consumerName, ev.Partitions)
+			log.Printf("[%s] Partitions revoked: %v", consumerName, ev.Partitions)
 			c.Unassign()
 		}
 		return nil
@@ -108,10 +114,9 @@ func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
 		msg, err := consumer.ReadMessage(-1)
 		if err != nil {
 			if msg != nil && msg.TopicPartition.Topic != nil {
-				fmt.Printf("[消费者：%s] ❌ Consumer error: %v (topic=%s partition=%d)\n",
-					consumerName, err, *msg.TopicPartition.Topic, msg.TopicPartition.Partition)
+				log.Printf("[%s] Consumer error: %v (topic=%s partition=%d)", consumerName, err, *msg.TopicPartition.Topic, msg.TopicPartition.Partition)
 			} else {
-				fmt.Printf("[消费者：%s] ❌ Consumer error: %v\n", consumerName, err)
+				log.Printf("[%s] Consumer error: %v", consumerName, err)
 			}
 			continue
 		}
@@ -120,11 +125,11 @@ func runConsumer(consumer *kafka.Consumer, consumerName string, topic string) {
 		if processMessage(consumerName, msg) {
 			_, commitErr := consumer.CommitMessage(msg)
 			if commitErr != nil {
-				log.Printf("[消费者：%s] ⚠️ Commit failed (offset %d): %v，下次将重复消费", consumerName, msg.TopicPartition.Offset, commitErr)
+				log.Printf("[%s] Commit failed (offset %d): %v，下次将重复消费", consumerName, msg.TopicPartition.Offset, commitErr)
 			}
 		} else {
 			// 处理失败，不提交 offset；重启或下次 poll 时会从上次未提交位置重新拉取
-			log.Printf("[消费者：%s] ⚠️ Process failed, skip commit for offset %d", consumerName, msg.TopicPartition.Offset)
+			log.Printf("[%s] Process failed, skip commit for offset %d", consumerName, msg.TopicPartition.Offset)
 		}
 	}
 }
@@ -139,8 +144,9 @@ func main() {
 	cfg := config.MustLoad("")
 	
 	fmt.Println("========================================")
-	fmt.Printf("Starting Kafka Consumer Groups\n")
-	fmt.Printf("Subscribing to topic: %s\n", cfg.Topic)
+	fmt.Printf("Starting Kafka Consumer (顺序性+一致性观察)\n")
+	fmt.Printf("Subscribing to topic: %s, group.id: %s\n", cfg.Topic, cfg.GroupId)
+	fmt.Println("观察要点: partition+offset 递增=顺序正确 | 同 key 落同分区=局部顺序")
 	fmt.Println("========================================")
 	
 	// 启动消费者组的 2 个消费者
